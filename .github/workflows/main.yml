@@ -1,0 +1,73 @@
+name: EPG
+
+on:
+  schedule:
+    - cron: '15 16,18,20,22,0,2,4,6,8,10,12,14 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install jq (for parsing JSON)
+        run: sudo apt-get install -y jq
+
+      - name: Download files from files.json
+        run: |
+          # 解析文件列表并下载
+          cat files.json | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r filename url; do
+            echo "Downloading $filename from $url"
+            wget -O "$filename" "$url" --retry-connrefused --waitretry=5 --timeout=30 || echo "$filename 下载失败，跳过"
+          done
+
+          # 将文件名列表写入 GITHUB_ENV，供后续步骤使用
+          cat files.json | jq -r 'keys[]' | while read -r filename; do
+            echo "FILENAME_$filename=$filename" >> $GITHUB_ENV
+          done
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+
+          files_to_add=""
+          for var in $(env | grep 'FILENAME_' | cut -d '=' -f 2); do
+            if [ -f "$var" ]; then
+              files_to_add="$files_to_add $var"
+            fi
+          done
+          
+          if [ -n "$files_to_add" ]; then
+            git add $files_to_add
+            now_time=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+            git commit -m "更新时间：$now_time"
+            git push origin main || echo "推送到GitHub失败"
+          else
+            echo "没有文件可提交"
+          fi
+
+      - name: Get current repository name
+        id: info
+        uses: actions/github-script@v3.1
+        with:
+          github-token: ${{secrets.GH_TOKEN}}
+          result-encoding: string
+          script: |
+            return context.repo.repo;
+            
+      - name: Mirror the repo to Gitee
+        uses: Yikun/hub-mirror-action@master
+        with:
+          src: github/TakcC
+          dst: gitee/takcheung
+          dst_key: ${{ secrets.GITEE_PRIVATE_KEY }}
+          dst_token: ${{ secrets.GITEE_TOKEN }}
+          static_list: '${{ steps.info.outputs.result }}'
+          account_type: user
+          force_update: true
+
+          
